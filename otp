@@ -1,0 +1,74 @@
+#!env python
+#
+# Select and display a Google Authenticator key based on
+# GnuPG-encrypted seeds.
+#
+# Doug Luce <doug@github.con.com>
+#
+
+import sys,re,tty,termios,os
+import argparse
+from subprocess import check_output, CalledProcessError
+from os.path import expanduser
+from onetimepass import get_totp
+
+parser = argparse.ArgumentParser(description='Spit out Google Authenticator codes')
+
+parser.add_argument('which', metavar='N', type=int, nargs='?',
+                    help='Which authenticator code to use.')
+parser.add_argument('-n', action='store_true', default=False, dest='noheader',
+                    help='Just show the code, not the header.')
+
+args = parser.parse_args()
+    
+KEYFILE = os.environ.get('KEYFILE', "%s/.sec/otp.gpg" % expanduser("~"))
+
+cmd = """
+  /usr/local/bin/gpg --no-options --no-emit-version
+                     --no-default-keyring
+                     --use-agent --decrypt
+"""
+
+batch = '--logger-file=/dev/null --batch'
+
+w = sys.stdout.write
+
+with open(KEYFILE, "rb") as file:
+  try:
+    data = check_output((cmd+batch).split(), stdin=file)
+  except:
+    file.seek(0)
+    data = check_output(cmd.split(), stdin=file)
+
+keys = dict()
+output = ""
+
+for i, line in enumerate(data.rstrip().split('\n'), 1):
+  (tag, key) = re.split('\s+', line)
+  keys[i] = (tag, key)
+  output += "%d) %s\n" % (i,tag)
+
+if args.which:
+  ch = args.which
+else:
+  w(output)
+  w("> ")
+
+  # Cribbed from http://code.activestate.com/recipes/134892/
+  fd = sys.stdin.fileno()
+  old_settings = termios.tcgetattr(fd)
+  try:
+    tty.setraw(fd)
+    ch = sys.stdin.read(1)
+  finally:
+    termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+  
+  w("%s\n" % ch);
+
+try:
+  key = keys[int(ch)]
+  if not args.noheader:
+    w('%s\n' % key[0])
+  w('%06d\n' % get_totp(key[1]))
+except (ValueError, KeyError):
+  w('Not a choice.\n')
