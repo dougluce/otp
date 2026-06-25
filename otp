@@ -44,13 +44,14 @@ import qrcode
 from io import StringIO
 homedir = expanduser("~")
 KEYFILE = "%s/.sec/otp.age" % homedir
+IDENTITY = "/Users/allen/.ssh/bale"
 
 def format_otp(tag, secret):
   return (tag, pyotp.totp.TOTP(secret).now(), secret)
 
 def find_entries(filter_term, exact = False):
   output = []
-  cmd = ['age', '-d', '-i', '/Users/allen/.ssh/bale', KEYFILE]
+  cmd = ['age', '-d', '-i', IDENTITY, KEYFILE]
   data = subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, input=b'').stdout
   lines = data.rstrip().split(b'\n')
   for i, l in enumerate(lines, 1):
@@ -101,33 +102,60 @@ def make_output(filter_term, xml = False, exact = False, qr_code = False):
         qr.print_ascii(cap)
   return cap.getvalue()
 
+# Identity and recipient for tests.
+
+TEST_IDENTITY = """-----BEGIN OPENSSH PRIVATE KEY-----
+b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAAAAtzc2gtZW
+QyNTUxOQAAACA+srzhwFcKJmVZqH9KIfwq77D1IGbthHpVgHpeG9zWPQAAAJBqZqwTamas
+EwAAAAtzc2gtZWQyNTUxOQAAACA+srzhwFcKJmVZqH9KIfwq77D1IGbthHpVgHpeG9zWPQ
+AAAEBUveyteVknEy1WoQShrtcCpPV6KF1LzqyjtNc4qJNwuD6yvOHAVwomZVmof0oh/Crv
+sPUgZu2EelWAel4b3NY9AAAADG90cC10ZXN0LWtleQE=
+-----END OPENSSH PRIVATE KEY-----
+"""
+
+TEST_RECIPIENT = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAID6yvOHAVwomZVmof0oh/CrvsPUgZu2EelWAel4b3NY9 otp-test"
+
 def test(args):
-  """Uses a fixed keyfile to match test assumptions. Still requires
-  that the file be decrypted by a key in the current user's GPG agent.
+  """Builds the keyfile fixture by encrypting this docstring's contents with
+  a throwaway key pair, so there's no opaque binary blob to maintain.
   Decrypted file contents:
   alpha DXGB265VIPTKJJAY
   beta HWLQWPRTFVCZRKNZ
   second-beta ACFBSDJG5UIPXEM4
   """
-  global KEYFILE
-  import doctest, tempfile, base64, os
-  tmp = tempfile.NamedTemporaryFile(delete=False)
+  global KEYFILE, IDENTITY
+  import doctest, tempfile, os, inspect
+  from pyrage import encrypt, ssh
+
+  # Pull the entry lines straight out of this function's docstring.
+  doc = inspect.getdoc(test)
+  plaintext = doc.split("Decrypted file contents:\n", 1)[1].encode()
+
+  recipient = ssh.Recipient.from_str(TEST_RECIPIENT)
+  ciphertext = encrypt(plaintext, [recipient])
+
+  id_file = tempfile.NamedTemporaryFile(mode='w', delete=False)
+  data_file = tempfile.NamedTemporaryFile(delete=False)
   try:
-    tmp.write(base64.b64decode("hQEMA/S91YFMxGy0AQf/Q56FAICNtMKOv/n/BAK5wg7vvZ85fdLGapx25S/UywtnOsgCr5OKklEUDTiVMO1nUJsA0z/3DUwk0z/NKSwJDged5y2fr/+7tT4ObS2byNoX5Fcz00iAGZR1HfAWzXLO0RF4WuFGWu550Pvo93qmvirU/L7z2lD2KGulkEfV7Gs94v45BQqYD44ZIom271/htp61yLI/GlrYXYdU7TgXToUaxBXZoGDhb/PT7DrTsEFZ8PFgD4l/cDx3ikA+4U5gzPyNK6viFgbDY6hrlW/hvfPiOrtwqEsYXRqE2/TmNe1VrqbPUQzxfvjmosC1gXp4ypu1XcyGScfahsqILzxg39KCAb3+ULSwQhBQBfJru0dNGbaF/crgrbYkIQjta3avrZEl20+bixI7iw8Z8dju+pPk5LXaF0q2dIvIiPqobWjNJkvauFhliBsrJg+viyX0xx6o+SpqMCJaMs4BCJFsJtaGCSfNr9mkbkiwWVSyGwr6L7qF2y29aPuCVcD1im4IP/LqUA=="))
-    KEYFILE = tmp.name
-    tmp.close()
+    id_file.write(TEST_IDENTITY)
+    id_file.close()
+    data_file.write(ciphertext)
+    data_file.close()
+    KEYFILE = data_file.name
+    IDENTITY = id_file.name
     result = doctest.testmod(verbose = args.verbose, exclude_empty = True)
     if result.failed == 0:
       print(f'{result.attempted} successful tests')
   finally:
-    os.unlink(tmp.name)
+    os.unlink(id_file.name)
+    os.unlink(data_file.name)
 
 def main():
   parser = argparse.ArgumentParser()
   parser.add_argument('term',  nargs='?', default='', help='Search term for finding the relevant key(s)')
   group = parser.add_mutually_exclusive_group()
   group.add_argument('-q', '--qr_code', help='produce a QR code for the found key(s)', action='store_true')
-  group.add_argument('-x', '--xml', help='Output XML for option enumeration by Alfred 3', action='store_true')
+  group.add_argument('-x', '--xml', help='Output XML for option enumeration by Alfred', action='store_true')
   parser.add_argument('-e', '--exact', help="Match must be exact, don't search substrings.", action='store_true')
   parser.add_argument('-t', '--test', help="Run doctests", action='store_true')
   parser.add_argument('-v', '--verbose', help="Run doctests verbosely", action='store_true')
